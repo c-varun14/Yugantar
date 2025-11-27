@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { google } from "@ai-sdk/google";
 import { generateText } from "ai";
+import { auth } from "@/lib/auth";
+import { headers } from "next/headers";
 
 interface GenerateVisualizationRequestBody {
   prompt?: string;
@@ -163,6 +165,18 @@ export async function POST(
   req: NextRequest
 ): Promise<NextResponse<GenerateVisualizationResponseBody>> {
   try {
+    const session = await auth.api.getSession({
+      headers: await headers(),
+    });
+    if (!session?.user) {
+      return NextResponse.json(
+        {
+          code: "",
+          error: "Unauthorized",
+        },
+        { status: 401 }
+      );
+    }
     if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
       return NextResponse.json(
         {

@@ -1,6 +1,8 @@
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { google } from "@ai-sdk/google";
 import { streamText } from "ai";
+import { auth } from "@/lib/auth";
+import { headers } from "next/headers";
 
 const systemPrompt = `You are an expert animation instruction generator. Convert the user's text description into detailed, structured animation instructions.
 
@@ -95,6 +97,12 @@ Return ONLY valid JSON, no markdown, no code fences, no explanations.`;
 
 export async function POST(req: NextRequest) {
   try {
+    const session = await auth.api.getSession({
+      headers: await headers(),
+    });
+    if (!session?.user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
       return new Response(
         JSON.stringify({
