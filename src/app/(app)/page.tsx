@@ -73,9 +73,43 @@ export default function HomePage() {
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
   useEffect(() => {
     textareaRef.current?.focus();
+  }, []);
+
+  // Load history from API
+  useEffect(() => {
+    const loadHistory = async () => {
+      setIsLoadingHistory(true);
+      try {
+        const response = await fetch("/api/prompt-history");
+        if (response.ok) {
+          const data = await response.json();
+          // Convert PromptLog entries to Conversation format
+          const loadedConversations: Conversation[] = data.logs.map((log: any) => ({
+            id: log.id,
+            title: log.prompt.slice(0, 50),
+            createdAt: new Date(log.createdAt).getTime(),
+            messages: [
+              {
+                prompt: log.prompt,
+                html: log.visualizationHtml,
+                createdAt: new Date(log.createdAt).getTime(),
+              },
+            ],
+          }));
+          setConversations(loadedConversations);
+        }
+      } catch (error) {
+        console.error("Error loading history:", error);
+      } finally {
+        setIsLoadingHistory(false);
+      }
+    };
+
+    loadHistory();
   }, []);
 
   const generateVisualizationFromInstructions = useCallback(
@@ -450,18 +484,32 @@ export default function HomePage() {
             )}
 
             {isGeneratingInstructions && (
+              <div className="mt-3 flex flex-col gap-2 rounded-xl border border-primary/60 bg-primary/10 px-3 py-2">
+                <div className="flex items-center gap-2 text-xs text-primary">
+                  <Spinner className="h-4 w-4" />
+                  <span>Generating animation instructions...</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleStopInstructions}
+                    className="ml-auto h-6 px-2 text-[10px]"
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                </div>
+                <div className="text-xs text-primary/80">
+                  ⏱️ This may take up to 2 minutes. Please be patient.
+                </div>
+              </div>
+            )}
+            {(isLoading && !isGeneratingInstructions) && (
               <div className="mt-3 flex items-center gap-2 rounded-xl border border-primary/60 bg-primary/10 px-3 py-2 text-xs text-primary">
                 <Spinner className="h-4 w-4" />
-                <span>Generating animation instructions...</span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleStopInstructions}
-                  className="ml-auto h-6 px-2 text-[10px]"
-                >
-                  <X className="h-3 w-3" />
-                </Button>
+                <span>Generating visualization...</span>
+                <span className="ml-auto text-primary/80">
+                  ⏱️ This may take up to 2 minutes
+                </span>
               </div>
             )}
           </Card>
@@ -694,7 +742,12 @@ export default function HomePage() {
             </Tabs>
 
             <ScrollArea className="h-[calc(100vh-12rem)]">
-              {sortedConversations.length === 0 ? (
+              {isLoadingHistory ? (
+                <div className="flex flex-col items-center justify-center h-32 text-sm text-muted-foreground">
+                  <Spinner className="h-6 w-6 mb-2" />
+                  <p>Loading history...</p>
+                </div>
+              ) : sortedConversations.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-32 text-sm text-muted-foreground">
                   <History className="h-8 w-8 mb-2 opacity-50" />
                   <p>No conversations yet</p>
@@ -716,6 +769,8 @@ export default function HomePage() {
                             conv.messages[conv.messages.length - 1];
                           setInputPrompt(lastMessage.prompt);
                           setGeneratedHTML(lastMessage.html);
+                          setApiWarning(null);
+                          setError(null);
                         }
                         setShowHistorySheet(false);
                       }}

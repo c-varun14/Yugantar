@@ -4,6 +4,7 @@ import { google } from "@ai-sdk/google";
 import { generateText } from "ai";
 import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
+import prisma from "@/lib/prisma-client";
 
 interface GenerateVisualizationRequestBody {
   prompt?: string;
@@ -41,11 +42,23 @@ CRITICAL ANIMATION REQUIREMENTS:
 - It is OK if the final animation runs longer than initially requested; prioritize clear explanation over strict duration.
 
 REQUIRED CONTROLS (MUST INCLUDE - OUTSIDE CANVAS):
-- Play/Pause button (toggle animation)
-- Reset button (When clicked, the animation should start from the beginning and play again.)
-- Speed control slider (0.5x to 2x speed)
-- Step forward/backward buttons (for step-by-step viewing if applicable)
-- All controls must be in a separate <div> BELOW the canvas element
+- Play/Pause button (toggle animation) - MUST work correctly
+- Reset button (When clicked, the animation should start from the beginning and play again.) - MUST work correctly
+- Speed control slider (0.5x to 2x speed) - MUST work correctly
+- Step forward button (advances animation by one frame or one logical step) - MUST work correctly
+- Step backward button (goes back one frame or one logical step) - MUST work correctly
+- All controls must be in a separate <div> ABOVE the canvas element (at the top, before the canvas)
+- CRITICAL: Step forward/backward buttons MUST be fully functional. They should:
+  * Step forward: Increment currentFrame by 1 (or move to next logical step), pause animation, and redraw
+  * Step backward: Decrement currentFrame by 1 (or move to previous logical step), pause animation, and redraw
+  * Ensure currentFrame stays within bounds (0 to totalFrames)
+  * When stepping, set isPlaying to false to pause the animation
+- EXTERNAL CONTROL COMPATIBILITY: Expose these functions globally (on window object) so external controls can call them:
+  * window.stepForward = function() { /* step forward logic */ }
+  * window.stepBackward = function() { /* step backward logic */ }
+  * window.resetAnimation = function() { /* reset logic */ }
+  * window.playAnimation = function() { /* play logic */ }
+  * Also listen for postMessage events: window.addEventListener('message', (e) => { if (e.data.type === 'stepForward') stepForward(); })
 
 TECHNICAL REQUIREMENTS:
 - Complete HTML file with <!DOCTYPE html>
@@ -53,16 +66,19 @@ TECHNICAL REQUIREMENTS:
 - Use native Canvas 2D context for all drawing operations
 - Canvas should be the ONLY element that gets recorded (no controls, no frame counters on canvas)
 - Canvas dimensions: 800x600 or 1000x700 (adjust based on content)
-- Structure: <canvas id="animationCanvas"></canvas> with controls in separate div
-- Controls div should be positioned OUTSIDE and BELOW the canvas
+- Structure: Controls div ABOVE canvas, then <canvas id="animationCanvas"></canvas> below controls
+- Controls div should be positioned OUTSIDE and ABOVE the canvas (at the top)
 - Canvas should be clean - no frame counters, no debug info visible on canvas
 - Only the animation content should be on the canvas
+- CRITICAL: Canvas must have max-height: 70vh style to ensure it fits within viewport
+- Canvas should use width: 100% and max-height: 70vh with object-fit: contain or similar to maintain aspect ratio
 - Use requestAnimationFrame for smooth animation loop
 - All text, shapes, and animations must be drawn using Canvas API methods
 - Modern, clean styling with good contrast
 - Responsive design (works on different screen sizes)
 - Add labels and titles INSIDE the canvas using fillText/strokeText
-- The main container/body layout should center the canvas horizontally and vertically in the viewport using flexbox (align-items: center; justify-content: center; min-height: 100vh; padding).
+- The main container/body layout should use flexbox with flex-direction: column to stack controls at top, then canvas
+- Container should ensure all content (controls + canvas) fits within viewport without scrolling
 
 ANIMATION STATE MANAGEMENT:
 - Use a global animation state object: { isPlaying: true, speed: 1, currentFrame: 0, totalFrames: 300 }
@@ -75,6 +91,12 @@ ANIMATION STATE MANAGEMENT:
   
   let animState = { isPlaying: true, speed: 1, currentFrame: 0, totalFrames: 300 };
   const FPS = 30;
+  let animationId = null;
+  
+  function drawFrame(frame) {
+    // Draw animation based on frame number
+    // This function should be able to draw any frame from 0 to totalFrames
+  }
   
   function animate() {
     if (!animState.isPlaying) return;
@@ -86,21 +108,73 @@ ANIMATION STATE MANAGEMENT:
     animState.currentFrame += animState.speed;
     
     if (animState.currentFrame < animState.totalFrames) {
-      requestAnimationFrame(animate);
+      animationId = requestAnimationFrame(animate);
     } else {
       animState.isPlaying = false;
       animState.currentFrame = animState.totalFrames;
+      drawFrame(animState.currentFrame);
     }
   }
+  
+  // CRITICAL: Step forward function (MUST BE IMPLEMENTED)
+  function stepForward() {
+    animState.isPlaying = false;
+    if (animationId) {
+      cancelAnimationFrame(animationId);
+      animationId = null;
+    }
+    if (animState.currentFrame < animState.totalFrames) {
+      animState.currentFrame = Math.min(animState.currentFrame + 1, animState.totalFrames);
+    }
+    drawFrame(animState.currentFrame);
+  }
+  
+  // CRITICAL: Step backward function (MUST BE IMPLEMENTED)
+  function stepBackward() {
+    animState.isPlaying = false;
+    if (animationId) {
+      cancelAnimationFrame(animationId);
+      animationId = null;
+    }
+    if (animState.currentFrame > 0) {
+      animState.currentFrame = Math.max(animState.currentFrame - 1, 0);
+    }
+    drawFrame(animState.currentFrame);
+  }
+  
+  // Expose functions globally for external control
+  window.stepForward = stepForward;
+  window.stepBackward = stepBackward;
+  window.resetAnimation = function() {
+    animState.isPlaying = false;
+    if (animationId) {
+      cancelAnimationFrame(animationId);
+      animationId = null;
+    }
+    animState.currentFrame = 0;
+    drawFrame(0);
+  };
+  window.playAnimation = function() {
+    if (!animState.isPlaying) {
+      animState.isPlaying = true;
+      animate();
+    }
+  };
+  
+  // Listen for postMessage events from parent window
+  window.addEventListener('message', function(e) {
+    if (e.data.type === 'stepForward') stepForward();
+    if (e.data.type === 'stepBackward') stepBackward();
+  });
 
 MEDIARECORDER INTEGRATION:
 - Canvas must support recording via canvas.captureStream(30)
 - Example structure:
-  <div style="display: flex; flex-direction: column; align-items: center; padding: 20px;">
-    <canvas id="animationCanvas" width="800" height="600" style="border: 1px solid #ccc; background: white;"></canvas>
-    <div style="margin-top: 20px;">
+  <div style="display: flex; flex-direction: column; align-items: center; padding: 20px; min-height: 100vh; box-sizing: border-box;">
+    <div style="margin-bottom: 20px; width: 100%; display: flex; justify-content: center; gap: 10px; flex-wrap: wrap;">
       <!-- Controls here: buttons, sliders, etc. -->
     </div>
+    <canvas id="animationCanvas" width="800" height="600" style="border: 1px solid #ccc; background: white; max-height: 70vh; width: 100%; object-fit: contain;"></canvas>
   </div>
 
 CANVAS DRAWING REQUIREMENTS:
@@ -164,8 +238,11 @@ function isLikelyCompleteHtml(html: string): boolean {
 export async function POST(
   req: NextRequest
 ): Promise<NextResponse<GenerateVisualizationResponseBody>> {
+  let session: Awaited<ReturnType<typeof auth.api.getSession>> = null;
+  let body: GenerateVisualizationRequestBody | null = null;
+  
   try {
-    const session = await auth.api.getSession({
+    session = await auth.api.getSession({
       headers: await headers(),
     });
     if (!session?.user) {
@@ -199,7 +276,7 @@ export async function POST(
       );
     }
 
-    const body = (await req.json()) as GenerateVisualizationRequestBody;
+    body = (await req.json()) as GenerateVisualizationRequestBody;
 
     const instructions = body?.instructions?.trim();
     const prompt = body?.prompt?.trim();
@@ -247,11 +324,23 @@ CRITICAL ANIMATION REQUIREMENTS:
 - It is OK if the final animation runs longer than initially requested; prioritize clear explanation over strict duration.
 
 REQUIRED CONTROLS (MUST INCLUDE - OUTSIDE CANVAS):
-- Play/Pause button (toggle animation)
-- Reset button (When clicked, the animation should start from the beginning and play again.)
-- Speed control slider (0.5x to 2x speed)
-- Step forward/backward buttons (for step-by-step viewing if applicable)
-- All controls must be in a separate <div> BELOW the canvas element
+- Play/Pause button (toggle animation) - MUST work correctly
+- Reset button (When clicked, the animation should start from the beginning and play again.) - MUST work correctly
+- Speed control slider (0.5x to 2x speed) - MUST work correctly
+- Step forward button (advances animation by one frame or one logical step) - MUST work correctly
+- Step backward button (goes back one frame or one logical step) - MUST work correctly
+- All controls must be in a separate <div> ABOVE the canvas element (at the top, before the canvas)
+- CRITICAL: Step forward/backward buttons MUST be fully functional. They should:
+  * Step forward: Increment currentFrame by 1 (or move to next logical step), pause animation, and redraw
+  * Step backward: Decrement currentFrame by 1 (or move to previous logical step), pause animation, and redraw
+  * Ensure currentFrame stays within bounds (0 to totalFrames)
+  * When stepping, set isPlaying to false to pause the animation
+- EXTERNAL CONTROL COMPATIBILITY: Expose these functions globally (on window object) so external controls can call them:
+  * window.stepForward = function() { /* step forward logic */ }
+  * window.stepBackward = function() { /* step backward logic */ }
+  * window.resetAnimation = function() { /* reset logic */ }
+  * window.playAnimation = function() { /* play logic */ }
+  * Also listen for postMessage events: window.addEventListener('message', (e) => { if (e.data.type === 'stepForward') stepForward(); })
 
 TECHNICAL REQUIREMENTS:
 - Complete HTML file with <!DOCTYPE html>
@@ -259,16 +348,19 @@ TECHNICAL REQUIREMENTS:
 - Use native Canvas 2D context for all drawing operations
 - Canvas should be the ONLY element that gets recorded (no controls, no frame counters on canvas)
 - Canvas dimensions: 800x600 or 1000x700 (adjust based on content)
-- Structure: <canvas id="animationCanvas"></canvas> with controls in separate div
-- Controls div should be positioned OUTSIDE and BELOW the canvas
+- Structure: Controls div ABOVE canvas, then <canvas id="animationCanvas"></canvas> below controls
+- Controls div should be positioned OUTSIDE and ABOVE the canvas (at the top)
 - Canvas should be clean - no frame counters, no debug info visible on canvas
 - Only the animation content should be on the canvas
+- CRITICAL: Canvas must have max-height: 70vh style to ensure it fits within viewport
+- Canvas should use width: 100% and max-height: 70vh with object-fit: contain or similar to maintain aspect ratio
 - Use requestAnimationFrame for smooth animation loop
 - All text, shapes, and animations must be drawn using Canvas API methods
 - Modern, clean styling with good contrast
 - Responsive design (works on different screen sizes)
 - Add labels and titles INSIDE the canvas using fillText/strokeText
-- The main container/body layout should center the canvas horizontally and vertically in the viewport using flexbox (align-items: center; justify-content: center; min-height: 100vh; padding).
+- The main container/body layout should use flexbox with flex-direction: column to stack controls at top, then canvas
+- Container should ensure all content (controls + canvas) fits within viewport without scrolling
 
 ANIMATION STATE MANAGEMENT:
 - Use a global animation state object: { isPlaying: true, speed: 1, currentFrame: 0, totalFrames: 300 }
@@ -281,6 +373,12 @@ ANIMATION STATE MANAGEMENT:
   
   let animState = { isPlaying: true, speed: 1, currentFrame: 0, totalFrames: 300 };
   const FPS = 30;
+  let animationId = null;
+  
+  function drawFrame(frame) {
+    // Draw animation based on frame number
+    // This function should be able to draw any frame from 0 to totalFrames
+  }
   
   function animate() {
     if (!animState.isPlaying) return;
@@ -292,21 +390,73 @@ ANIMATION STATE MANAGEMENT:
     animState.currentFrame += animState.speed;
     
     if (animState.currentFrame < animState.totalFrames) {
-      requestAnimationFrame(animate);
+      animationId = requestAnimationFrame(animate);
     } else {
       animState.isPlaying = false;
       animState.currentFrame = animState.totalFrames;
+      drawFrame(animState.currentFrame);
     }
   }
+  
+  // CRITICAL: Step forward function (MUST BE IMPLEMENTED)
+  function stepForward() {
+    animState.isPlaying = false;
+    if (animationId) {
+      cancelAnimationFrame(animationId);
+      animationId = null;
+    }
+    if (animState.currentFrame < animState.totalFrames) {
+      animState.currentFrame = Math.min(animState.currentFrame + 1, animState.totalFrames);
+    }
+    drawFrame(animState.currentFrame);
+  }
+  
+  // CRITICAL: Step backward function (MUST BE IMPLEMENTED)
+  function stepBackward() {
+    animState.isPlaying = false;
+    if (animationId) {
+      cancelAnimationFrame(animationId);
+      animationId = null;
+    }
+    if (animState.currentFrame > 0) {
+      animState.currentFrame = Math.max(animState.currentFrame - 1, 0);
+    }
+    drawFrame(animState.currentFrame);
+  }
+  
+  // Expose functions globally for external control
+  window.stepForward = stepForward;
+  window.stepBackward = stepBackward;
+  window.resetAnimation = function() {
+    animState.isPlaying = false;
+    if (animationId) {
+      cancelAnimationFrame(animationId);
+      animationId = null;
+    }
+    animState.currentFrame = 0;
+    drawFrame(0);
+  };
+  window.playAnimation = function() {
+    if (!animState.isPlaying) {
+      animState.isPlaying = true;
+      animate();
+    }
+  };
+  
+  // Listen for postMessage events from parent window
+  window.addEventListener('message', function(e) {
+    if (e.data.type === 'stepForward') stepForward();
+    if (e.data.type === 'stepBackward') stepBackward();
+  });
 
 MEDIARECORDER INTEGRATION:
 - Canvas must support recording via canvas.captureStream(30)
 - Example structure:
-  <div style="display: flex; flex-direction: column; align-items: center; padding: 20px;">
-    <canvas id="animationCanvas" width="800" height="600" style="border: 1px solid #ccc; background: white;"></canvas>
-    <div style="margin-top: 20px;">
+  <div style="display: flex; flex-direction: column; align-items: center; padding: 20px; min-height: 100vh; box-sizing: border-box;">
+    <div style="margin-bottom: 20px; width: 100%; display: flex; justify-content: center; gap: 10px; flex-wrap: wrap;">
       <!-- Controls here: buttons, sliders, etc. -->
     </div>
+    <canvas id="animationCanvas" width="800" height="600" style="border: 1px solid #ccc; background: white; max-height: 70vh; width: 100%; object-fit: contain;"></canvas>
   </div>
 
 CANVAS DRAWING REQUIREMENTS:
@@ -364,6 +514,35 @@ Return ONLY the complete HTML code, no markdown backticks, no explanations.`
 
     const validHtml = isLikelyCompleteHtml(code);
 
+    // Save to database after code generation
+    try {
+      const visualizationEndedAt = new Date();
+      let parsedInstructions = null;
+      try {
+        parsedInstructions = instructions ? JSON.parse(instructions) : null;
+      } catch {
+        // If instructions is not valid JSON, store as null
+      }
+      
+      await prisma.promptLog.create({
+        data: {
+          userId: session.user.id,
+          prompt: inputText,
+          instructions: parsedInstructions ?? undefined,
+          narrativeGuide: narrativeGuide ?? undefined,
+          visualizationHtml: code,
+          status: validHtml ? "VISUALIZATION_COMPLETE" : "FAILED",
+          errorMessage: validHtml
+            ? undefined
+            : "Generated output may not be a complete HTML document. Please validate before use.",
+          visualizationEndedAt: visualizationEndedAt,
+        },
+      });
+    } catch (dbError) {
+      console.error("Error saving to database:", dbError);
+      // Don't fail the request if database save fails
+    }
+
     return NextResponse.json(
       {
         code,
@@ -378,6 +557,37 @@ Return ONLY the complete HTML code, no markdown backticks, no explanations.`
     );
   } catch (error) {
     console.error("Error generating visualization:", error);
+
+    // Try to save error to database
+    if (session?.user && body) {
+      try {
+        const instructions = body?.instructions?.trim();
+        const prompt = body?.prompt?.trim();
+        const inputText = instructions || prompt;
+        
+        if (inputText) {
+          let parsedInstructions = null;
+          try {
+            parsedInstructions = instructions ? JSON.parse(instructions) : null;
+          } catch {
+            // If instructions is not valid JSON, store as null
+          }
+          
+          await prisma.promptLog.create({
+            data: {
+              userId: session.user.id,
+              prompt: inputText,
+              instructions: parsedInstructions ?? undefined,
+              narrativeGuide: body?.narrativeGuide ?? undefined,
+              status: "FAILED",
+              errorMessage: error instanceof Error ? error.message : "Failed to generate visualization HTML.",
+            },
+          });
+        }
+      } catch (dbError) {
+        console.error("Error saving error to database:", dbError);
+      }
+    }
 
     return NextResponse.json(
       {
